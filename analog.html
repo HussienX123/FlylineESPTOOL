@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlylineXR — Magnetic Field Analyzer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+
+  :root {
+    --bg:      #0a0b0f;
+    --bg2:     #111318;
+    --bg3:     #181b22;
+    --border:  #1e2330;
+    --text:    #e8eaf0;
+    --muted:   #4a5068;
+    --accent:  #00e5ff;
+    --accent2: #ff4d6d;
+    --accent3: #a8ff78;
+    --accent4: #ffd166;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    min-height: 100vh;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,229,255,0.012) 2px, rgba(0,229,255,0.012) 4px);
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  header {
+    padding: 28px 40px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap;
+  }
+  .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 22px; color: var(--accent); text-shadow: 0 0 24px rgba(0,229,255,0.4); }
+  .logo span { color: var(--text); }
+  .subtitle { font-size: 11px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; padding-bottom: 3px; }
+
+  /* upload */
+  .upload-zone {
+    margin: 36px 40px 0;
+    border: 1.5px dashed var(--border);
+    border-radius: 4px; padding: 48px 32px;
+    text-align: center; cursor: pointer; position: relative;
+    transition: border-color .2s, background .2s;
+  }
+  .upload-zone:hover, .upload-zone.drag-over { border-color: var(--accent); background: rgba(0,229,255,0.03); }
+  .upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .upload-icon { font-size: 36px; margin-bottom: 12px; }
+  .upload-label { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .upload-sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+
+  /* stats */
+  .stats-bar {
+    display: none; margin: 20px 40px 0;
+    padding: 14px 20px;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+    gap: 32px; flex-wrap: wrap;
+  }
+  .stat { display: flex; flex-direction: column; gap: 3px; }
+  .stat-label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; }
+  .stat-value { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 700; color: var(--accent); }
+  .stat-value.warn { color: var(--accent2); }
+  .stat-value.ok   { color: var(--accent3); }
+
+  /* controls */
+  .controls {
+    display: none; margin: 12px 40px 0;
+    gap: 10px; flex-wrap: wrap; align-items: center;
+  }
+  .btn {
+    font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 1px;
+    padding: 7px 14px; border: 1px solid var(--border); border-radius: 2px;
+    background: var(--bg2); color: var(--muted); cursor: pointer;
+    transition: all .15s; text-transform: uppercase;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,0.06); }
+  .btn.danger:hover { border-color: var(--accent2); color: var(--accent2); }
+  .pass-filter {
+    font-family: 'Space Mono', monospace; font-size: 11px;
+    background: var(--bg2); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 10px; border-radius: 2px; outline: none;
+  }
+
+  /* chart section */
+  .chart-section {
+    display: none; margin: 20px 40px 0;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 20px;
+  }
+  .chart-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px; flex-wrap: wrap; gap: 8px;
+  }
+  .chart-title {
+    font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700;
+    color: var(--muted); letter-spacing: 2px; text-transform: uppercase;
+  }
+  .zoom-row { display: flex; gap: 8px; align-items: center; }
+  .zoom-hint { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+
+  /* main chart container */
+  #chart-host {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    cursor: crosshair;
+    background: var(--bg);
+  }
+  #chart-host svg { display: block; }
+
+  /* minimap */
+  #minimap-host {
+    width: 100%;
+    margin-top: 6px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    background: var(--bg);
+    overflow: hidden;
+  }
+  #minimap-host svg { display: block; }
+  .brush-sel { fill: rgba(0,229,255,0.15); stroke: var(--accent); stroke-width: 1; }
+
+  /* pass cards */
+  .passes-section { display: none; margin: 20px 40px 40px; }
+  .section-title {
+    font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700;
+    color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 14px;
+  }
+  .passes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); gap: 14px; }
+  .pass-card {
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
+    padding: 14px; cursor: pointer; transition: border-color .15s;
+  }
+  .pass-card:hover { border-color: var(--accent); }
+  .pass-card.selected { border-color: var(--accent); background: rgba(0,229,255,0.03); }
+  .pass-card.noise { border-color: rgba(255,77,109,0.25); }
+  .pass-card.noise:hover { border-color: var(--accent2); }
+  .pass-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .pass-num { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 800; color: var(--accent); }
+  .pass-num.n { color: var(--accent2); }
+  .pass-badge {
+    font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 2px; border: 1px solid;
+  }
+  .b-ok    { color: var(--accent3); border-color: rgba(168,255,120,0.3); background: rgba(168,255,120,0.05); }
+  .b-noise { color: var(--accent2); border-color: rgba(255,77,109,0.3);  background: rgba(255,77,109,0.05); }
+  .b-weak  { color: var(--accent4); border-color: rgba(255,209,102,0.3); background: rgba(255,209,102,0.05); }
+  .pass-meta { display: flex; gap: 14px; margin-bottom: 8px; }
+  .pm { display: flex; flex-direction: column; gap: 2px; }
+  .pm-l { font-size: 9px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+  .pm-v { font-size: 12px; color: var(--text); }
+  .pass-svg { width: 100%; height: 56px; display: block; }
+
+  /* tooltip */
+  .tooltip {
+    position: fixed; background: var(--bg3); border: 1px solid var(--accent);
+    border-radius: 3px; padding: 6px 10px; font-size: 11px; color: var(--text);
+    pointer-events: none; opacity: 0; transition: opacity .1s; z-index: 999; white-space: nowrap;
+  }
+
+  .empty { text-align: center; padding: 50px; color: var(--muted); font-size: 12px; letter-spacing: 1px; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">FlylineXR <span>Analyzer</span></div>
+    <div class="subtitle">Magnetic Field Session Viewer</div>
+  </div>
+</header>
+
+<div class="upload-zone" id="dropzone">
+  <input type="file" id="csv-input" accept=".csv,.txt">
+  <div class="upload-icon">⬡</div>
+  <div class="upload-label">Drop session CSV here</div>
+  <div class="upload-sub">FlylineXR_Session_*.csv — exported from Unity</div>
+</div>
+
+<div class="stats-bar" id="stats-bar">
+  <div class="stat"><div class="stat-label">Total Samples</div><div class="stat-value" id="st-samples">—</div></div>
+  <div class="stat"><div class="stat-label">Duration</div><div class="stat-value" id="st-duration">—</div></div>
+  <div class="stat"><div class="stat-label">Valid Passes</div><div class="stat-value ok" id="st-passes">—</div></div>
+  <div class="stat"><div class="stat-label">Noise Events</div><div class="stat-value warn" id="st-noise">—</div></div>
+  <div class="stat"><div class="stat-label">Peak Deviation</div><div class="stat-value" id="st-peak">—</div></div>
+  <div class="stat"><div class="stat-label">Avg Pass Peak</div><div class="stat-value" id="st-avgpeak">—</div></div>
+</div>
+
+<div class="controls" id="controls">
+  <button class="btn active" id="btn-all"   onclick="setView('all')">All passes</button>
+  <button class="btn"        id="btn-ok"    onclick="setView('ok')">Valid only</button>
+  <button class="btn"        id="btn-noise" onclick="setView('noise')">Noise only</button>
+  <button class="btn danger"               onclick="clearData()">Clear</button>
+  <select class="pass-filter" id="pass-sel" onchange="jumpToPass(this.value)">
+    <option value="">Jump to pass…</option>
+  </select>
+</div>
+
+<div class="chart-section" id="chart-section">
+  <div class="chart-header">
+    <div class="chart-title">Full session — deviation from baseline</div>
+    <div class="zoom-row">
+      <span class="zoom-hint">scroll = zoom · drag = pan</span>
+      <button class="btn" onclick="doZoom(2)">＋</button>
+      <button class="btn" onclick="doZoom(0.5)">－</button>
+      <button class="btn" onclick="resetZoom()">Reset</button>
+    </div>
+  </div>
+  <div id="chart-host"></div>
+  <div id="minimap-host"></div>
+</div>
+
+<div class="passes-section" id="passes-section">
+  <div class="section-title">Individual passes</div>
+  <div class="passes-grid" id="passes-grid"></div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ── state ─────────────────────────────────────────────────────
+let samples = [], passes = [], viewMode = 'all';
+
+// chart globals
+let cW, cH, cIW, cIH;
+const cM = { top:14, right:18, bottom:34, left:54 };
+const CHART_H = 340, MINI_H = 52;
+
+let xOrig, xCur, yScale;
+let svgMain, gMain, gLine, gBands, xAxisG;
+let svgMini, gMini;
+let brushBeh, brushG;
+let zoomBeh, zoomOverlay;
+
+// ── CSV parse ─────────────────────────────────────────────────
+function parseCSV(text) {
+  return text.trim().split('\n').slice(1).map(l => {
+    const [t, raw, dev, ctr] = l.split(',');
+    return { t: +t, raw: +raw, dev: +dev, counter: +ctr };
+  }).filter(d => !isNaN(d.t) && !isNaN(d.dev));
+}
+
+// ── segmentation ──────────────────────────────────────────────
+function segment(samps) {
+  const ENTER=60, EXIT=30, NOISE_PEAK=120, MIN_DUR=0.03;
+  const segs=[]; let inP=false, si=0;
+  for(let i=0;i<samps.length;i++){
+    const a=Math.abs(samps[i].dev);
+    if(!inP && a>=ENTER){ inP=true; si=i; }
+    else if(inP && a<EXIT){
+      inP=false;
+      const chunk=samps.slice(si,i);
+      const peak=d3.max(chunk,d=>Math.abs(d.dev));
+      const dur=chunk[chunk.length-1].t-chunk[0].t;
+      segs.push({id:segs.length+1,samples:chunk,peak,dur,isNoise:peak<NOISE_PEAK||dur<MIN_DUR});
+    }
+  }
+  if(inP){
+    const chunk=samps.slice(si);
+    const peak=d3.max(chunk,d=>Math.abs(d.dev));
+    const dur=chunk[chunk.length-1].t-chunk[0].t;
+    segs.push({id:segs.length+1,samples:chunk,peak,dur,isNoise:peak<120});
+  }
+  return segs;
+}
+
+// ── file loading ──────────────────────────────────────────────
+document.getElementById('csv-input').onchange = e => { if(e.target.files[0]) loadFile(e.target.files[0]); };
+const dz = document.getElementById('dropzone');
+dz.ondragover = e => { e.preventDefault(); dz.classList.add('drag-over'); };
+dz.ondragleave = () => dz.classList.remove('drag-over');
+dz.ondrop = e => { e.preventDefault(); dz.classList.remove('drag-over'); if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); };
+
+function loadFile(f){ const r=new FileReader(); r.onload=e=>process(e.target.result); r.readAsText(f); }
+
+function process(text){
+  samples = parseCSV(text);
+  if(!samples.length){ alert('No valid data found.'); return; }
+  passes = segment(samples);
+  updateStats();
+  buildChart();
+  renderCards();
+  fillJumpSelect();
+  document.getElementById('stats-bar').style.display    = 'flex';
+  document.getElementById('controls').style.display     = 'flex';
+  document.getElementById('chart-section').style.display = 'block';
+  document.getElementById('passes-section').style.display = 'block';
+  document.getElementById('dropzone').style.display     = 'none';
+}
+
+// ── stats ─────────────────────────────────────────────────────
+function updateStats(){
+  const valid=passes.filter(p=>!p.isNoise);
+  const dur=samples[samples.length-1].t-samples[0].t;
+  const peak=d3.max(samples,d=>Math.abs(d.dev));
+  const avg=valid.length ? Math.round(d3.mean(valid,p=>p.peak)) : 0;
+  document.getElementById('st-samples').textContent  = samples.length.toLocaleString();
+  document.getElementById('st-duration').textContent = dur.toFixed(1)+'s';
+  document.getElementById('st-passes').textContent   = valid.length;
+  document.getElementById('st-noise').textContent    = passes.filter(p=>p.isNoise).length;
+  document.getElementById('st-peak').textContent     = '±'+peak;
+  document.getElementById('st-avgpeak').textContent  = '±'+avg;
+}
+
+// ── MAIN CHART ────────────────────────────────────────────────
+function buildChart(){
+  // measure AFTER section is visible
+  const host = document.getElementById('chart-host');
+  host.innerHTML = '';
+  document.getElementById('minimap-host').innerHTML = '';
+
+  cW  = host.clientWidth;
+  cIW = cW - cM.left - cM.right;
+  cIH = CHART_H - cM.top - cM.bottom;
+  cH  = CHART_H;
+
+  if(cIW <= 0){ setTimeout(buildChart, 100); return; }
+
+  // scales
+  const tExt = d3.extent(samples, d=>d.t);
+  const yExt = d3.extent(samples, d=>d.dev);
+  const yMax = Math.max(Math.abs(yExt[0]), Math.abs(yExt[1]), 100);
+
+  xOrig = d3.scaleLinear().domain(tExt).range([0, cIW]);
+  xCur  = xOrig.copy();
+  yScale = d3.scaleLinear().domain([-yMax, yMax]).range([cIH, 0]);
+
+  // SVG
+  svgMain = d3.select(host).append('svg')
+    .attr('width', cW).attr('height', cH);
+
+  // defs: clip + glow
+  const defs = svgMain.append('defs');
+  defs.append('clipPath').attr('id','main-clip')
+    .append('rect').attr('width',cIW).attr('height',cIH);
+  const filt = defs.append('filter').attr('id','glow-f');
+  filt.append('feGaussianBlur').attr('stdDeviation','2').attr('result','cb');
+  const fm = filt.append('feMerge');
+  fm.append('feMergeNode').attr('in','cb');
+  fm.append('feMergeNode').attr('in','SourceGraphic');
+
+  gMain = svgMain.append('g').attr('transform',`translate(${cM.left},${cM.top})`);
+
+  // grid
+  gMain.append('g').attr('class','grid-g')
+    .call(d3.axisLeft(yScale).ticks(6).tickSize(-cIW).tickFormat(''))
+    .call(g=>g.selectAll('line').attr('stroke','rgba(255,255,255,0.04)').attr('stroke-dasharray','3,3'))
+    .call(g=>g.select('.domain').remove());
+
+  // zero
+  gMain.append('line').attr('class','zero-line')
+    .attr('x1',0).attr('x2',cIW)
+    .attr('y1',yScale(0)).attr('y2',yScale(0))
+    .attr('stroke','rgba(255,255,255,0.12)').attr('stroke-width',1);
+
+  // pass bands group (clipped)
+  gBands = gMain.append('g').attr('clip-path','url(#main-clip)');
+  drawBands(xCur);
+
+  // line group (clipped)
+  gLine = gMain.append('g').attr('clip-path','url(#main-clip)');
+  gLine.append('path').attr('class','main-line')
+    .datum(samples)
+    .attr('fill','none')
+    .attr('stroke','var(--accent)')
+    .attr('stroke-width',1.5)
+    .attr('filter','url(#glow-f)')
+    .attr('d', makeLine(xCur));
+
+  // y axis
+  gMain.append('g').call(d3.axisLeft(yScale).ticks(6))
+    .call(g=>g.selectAll('text').attr('fill','var(--muted)').attr('font-size',10).attr('font-family',"'Space Mono',monospace"))
+    .call(g=>g.select('.domain').attr('stroke','var(--border)'))
+    .call(g=>g.selectAll('.tick line').attr('stroke','var(--border)'));
+
+  // x axis
+  xAxisG = gMain.append('g').attr('transform',`translate(0,${cIH})`);
+  drawXAxis(xCur);
+
+  // crosshair elements
+  const crossV = gMain.append('line').attr('y1',0).attr('y2',cIH)
+    .attr('stroke','var(--accent)').attr('stroke-width',1).attr('stroke-dasharray','4,3').attr('opacity',.5).style('display','none');
+  const crossH = gMain.append('line').attr('x1',0).attr('x2',cIW)
+    .attr('stroke','var(--accent)').attr('stroke-width',1).attr('stroke-dasharray','4,3').attr('opacity',.5).style('display','none');
+  const dot = gMain.append('circle').attr('r',3).attr('fill','var(--accent)').style('display','none');
+  const bisect = d3.bisector(d=>d.t).left;
+  const tip = document.getElementById('tooltip');
+
+  // zoom behaviour
+  zoomBeh = d3.zoom()
+    .scaleExtent([1, 100])
+    .translateExtent([[0,0],[cIW,cIH]])
+    .extent([[0,0],[cIW,cIH]])
+    .on('zoom', onZoom);
+
+  // overlay rect (handles zoom + mouse)
+  zoomOverlay = svgMain.append('rect')
+    .attr('x',cM.left).attr('y',cM.top)
+    .attr('width',cIW).attr('height',cIH)
+    .attr('fill','transparent')
+    .attr('cursor','crosshair')
+    .call(zoomBeh)
+    .on('mousemove', function(ev){
+      const [mx] = d3.pointer(ev, gMain.node());
+      const t0 = xCur.invert(mx);
+      const idx = Math.min(bisect(samples,t0,1), samples.length-1);
+      const d = samples[idx]; if(!d) return;
+      const cx=xCur(d.t), cy=yScale(d.dev);
+      crossV.attr('x1',cx).attr('x2',cx).style('display',null);
+      crossH.attr('y1',cy).attr('y2',cy).style('display',null);
+      dot.attr('cx',cx).attr('cy',cy).style('display',null);
+      tip.style.opacity='1';
+      tip.style.left=(ev.clientX+14)+'px';
+      tip.style.top=(ev.clientY-28)+'px';
+      tip.innerHTML=`t: ${d.t.toFixed(3)}s &nbsp;|&nbsp; dev: ${d.dev>0?'+':''}${d.dev} &nbsp;|&nbsp; raw: ${d.raw} &nbsp;|&nbsp; pass: ${d.counter}`;
+    })
+    .on('mouseleave',()=>{
+      crossV.style('display','none'); crossH.style('display','none');
+      dot.style('display','none'); tip.style.opacity='0';
+    });
+
+  buildMinimap(tExt, yMax);
+}
+
+function makeLine(xS){
+  return d3.line().x(d=>xS(d.t)).y(d=>yScale(d.dev)).curve(d3.curveCatmullRom.alpha(0.5));
+}
+
+function drawBands(xS){
+  gBands.selectAll('rect').remove();
+  passes.forEach(p=>{
+    const x0=xS(p.samples[0].t);
+    const x1=xS(p.samples[p.samples.length-1].t);
+    if(x1<0||x0>cIW) return;
+    gBands.append('rect')
+      .attr('x',Math.max(x0,0))
+      .attr('y',0)
+      .attr('width',Math.max(Math.min(x1,cIW)-Math.max(x0,0), 1))
+      .attr('height',cIH)
+      .attr('fill',p.isNoise?'rgba(255,77,109,0.07)':'rgba(0,229,255,0.06)')
+      .attr('rx',1);
+  });
+}
+
+function drawXAxis(xS){
+  xAxisG.call(
+    d3.axisBottom(xS).ticks(Math.max(2, Math.floor(cIW/90)))
+      .tickFormat(d=>d.toFixed(1)+'s')
+  )
+  .call(g=>g.selectAll('text').attr('fill','var(--muted)').attr('font-size',10).attr('font-family',"'Space Mono',monospace"))
+  .call(g=>g.select('.domain').attr('stroke','var(--border)'))
+  .call(g=>g.selectAll('.tick line').attr('stroke','var(--border)'));
+}
+
+function onZoom(event){
+  const t = event.transform;
+  xCur = t.rescaleX(xOrig);
+  gLine.select('.main-line').attr('d', makeLine(xCur));
+  drawXAxis(xCur);
+  drawBands(xCur);
+  // sync minimap brush
+  const sel = [xOrig(xCur.invert(0)), xOrig(xCur.invert(cIW))];
+  const mIW = getMiniIW();
+  const ratio = mIW / cIW;
+  brushG.call(brushBeh.move, [
+    Math.max(0, sel[0] * ratio),
+    Math.min(mIW, sel[1] * ratio)
+  ]);
+}
+
+// ── MINIMAP ───────────────────────────────────────────────────
+function getMiniIW(){
+  const mHost = document.getElementById('minimap-host');
+  const mW = mHost.clientWidth || cW;
+  return mW - cM.left - cM.right;
+}
+
+function buildMinimap(tExt, yMax){
+  const mHost = document.getElementById('minimap-host');
+  const mW  = mHost.clientWidth || cW;
+  const mIW = mW - cM.left - cM.right;
+  const mIH = MINI_H - 6 - 16;
+
+  svgMini = d3.select(mHost).append('svg').attr('width',mW).attr('height',MINI_H);
+  gMini = svgMini.append('g').attr('transform',`translate(${cM.left},6)`);
+
+  const mX = d3.scaleLinear().domain(tExt).range([0,mIW]);
+  const mY = d3.scaleLinear().domain([-yMax,yMax]).range([mIH,0]);
+
+  const mDefs = svgMini.append('defs');
+  mDefs.append('clipPath').attr('id','mini-clip')
+    .append('rect').attr('width',mIW).attr('height',mIH);
+
+  // mini line
+  gMini.append('g').attr('clip-path','url(#mini-clip)')
+    .append('path')
+    .datum(samples)
+    .attr('fill','none')
+    .attr('stroke','var(--accent)')
+    .attr('stroke-width',0.8)
+    .attr('opacity',0.5)
+    .attr('d', d3.line().x(d=>mX(d.t)).y(d=>mY(d.dev)).curve(d3.curveCatmullRom.alpha(0.5)));
+
+  // zero
+  gMini.append('line').attr('x1',0).attr('x2',mIW)
+    .attr('y1',mY(0)).attr('y2',mY(0))
+    .attr('stroke','rgba(255,255,255,0.1)').attr('stroke-width',1);
+
+  // x labels
+  gMini.append('g').attr('transform',`translate(0,${mIH})`)
+    .call(d3.axisBottom(mX).ticks(6).tickFormat(d=>d.toFixed(0)+'s'))
+    .call(g=>g.selectAll('text').attr('fill','var(--muted)').attr('font-size',9).attr('font-family',"'Space Mono',monospace"))
+    .call(g=>g.select('.domain').attr('stroke','var(--border)'))
+    .call(g=>g.selectAll('.tick line').attr('stroke','var(--border)'));
+
+  // brush
+  brushBeh = d3.brushX()
+    .extent([[0,0],[mIW,mIH]])
+    .on('brush end', function(ev){
+      if(!ev.sourceEvent) return; // ignore programmatic
+      const sel = ev.selection || [0,mIW];
+      const t0 = mX.invert(sel[0]);
+      const t1 = mX.invert(sel[1]);
+      const span = t1 - t0;
+      const fullSpan = tExt[1] - tExt[0];
+      if(span <= 0) return;
+      const sc = fullSpan / span;
+      const tx = -xOrig(t0) * sc;
+      zoomOverlay.call(zoomBeh.transform,
+        d3.zoomIdentity.scale(sc).translate(tx/sc, 0));
+    });
+
+  brushG = gMini.append('g').call(brushBeh);
+  // style brush selection
+  brushG.select('.selection')
+    .attr('fill','rgba(0,229,255,0.15)')
+    .attr('stroke','var(--accent)')
+    .attr('stroke-width',1);
+  // initial: full width selected
+  brushG.call(brushBeh.move, [0, mIW]);
+}
+
+// ── zoom buttons ──────────────────────────────────────────────
+function doZoom(factor){
+  zoomOverlay.transition().duration(240).call(zoomBeh.scaleBy, factor);
+}
+function resetZoom(){
+  zoomOverlay.transition().duration(300).call(zoomBeh.transform, d3.zoomIdentity);
+}
+
+// ── PASS CARDS ────────────────────────────────────────────────
+function renderCards(){
+  const grid = document.getElementById('passes-grid');
+  grid.innerHTML = '';
+  const list = passes.filter(p=>{
+    if(viewMode==='ok')    return !p.isNoise;
+    if(viewMode==='noise') return  p.isNoise;
+    return true;
+  });
+  if(!list.length){ grid.innerHTML='<div class="empty">No passes match the current filter.</div>'; return; }
+  list.forEach(p=>{
+    const card = document.createElement('div');
+    card.className = `pass-card${p.isNoise?' noise':''}`;
+    card.id = `pc-${p.id}`;
+    const badge = p.isNoise
+      ? '<span class="pass-badge b-noise">noise / weak</span>'
+      : p.peak>300
+        ? '<span class="pass-badge b-ok">strong</span>'
+        : '<span class="pass-badge b-weak">weak</span>';
+    card.innerHTML = `
+      <div class="pass-header">
+        <div class="pass-num${p.isNoise?' n':''}">Pass #${p.id}</div>${badge}
+      </div>
+      <div class="pass-meta">
+        <div class="pm"><div class="pm-l">Peak</div><div class="pm-v">±${p.peak}</div></div>
+        <div class="pm"><div class="pm-l">Duration</div><div class="pm-v">${(p.dur*1000).toFixed(0)}ms</div></div>
+        <div class="pm"><div class="pm-l">Samples</div><div class="pm-v">${p.samples.length}</div></div>
+        <div class="pm"><div class="pm-l">At</div><div class="pm-v">${p.samples[0].t.toFixed(2)}s</div></div>
+      </div>
+      <svg class="pass-svg" id="sp-${p.id}"></svg>`;
+    card.onclick = () => {
+      document.querySelectorAll('.pass-card').forEach(c=>c.classList.remove('selected'));
+      card.classList.add('selected');
+    };
+    grid.appendChild(card);
+    drawSparkline(p);
+  });
+}
+
+function drawSparkline(p){
+  const el = document.getElementById(`sp-${p.id}`);
+  if(!el) return;
+  const W = el.parentElement.clientWidth - 28;
+  const H = 56;
+  if(W <= 0) return;
+  const pad = 4;
+  const svg = d3.select(`#sp-${p.id}`).attr('width',W).attr('height',H);
+  const xS = d3.scaleLinear().domain(d3.extent(p.samples,d=>d.t)).range([pad,W-pad]);
+  const devs = p.samples.map(d=>d.dev);
+  const yM = Math.max(Math.abs(d3.min(devs)),Math.abs(d3.max(devs)),50);
+  const yS = d3.scaleLinear().domain([-yM,yM]).range([H-pad,pad]);
+  const color = p.isNoise ? 'var(--accent2)' : 'var(--accent)';
+  const defs = svg.append('defs');
+  defs.append('linearGradient').attr('id',`gr-${p.id}`)
+    .attr('x1','0%').attr('x2','0%').attr('y1','0%').attr('y2','100%')
+    .selectAll('stop').data([{o:'0%',op:.22},{o:'100%',op:.02}]).enter().append('stop')
+    .attr('offset',d=>d.o).attr('stop-color',color).attr('stop-opacity',d=>d.op);
+  svg.append('line').attr('x1',pad).attr('x2',W-pad)
+    .attr('y1',yS(0)).attr('y2',yS(0)).attr('stroke','rgba(255,255,255,0.1)');
+  const curve = d3.curveCatmullRom.alpha(0.5);
+  svg.append('path').datum(p.samples)
+    .attr('fill',`url(#gr-${p.id})`)
+    .attr('d',d3.area().x(d=>xS(d.t)).y0(yS(0)).y1(d=>yS(d.dev)).curve(curve));
+  svg.append('path').datum(p.samples)
+    .attr('fill','none').attr('stroke',color).attr('stroke-width',1.6)
+    .attr('d',d3.line().x(d=>xS(d.t)).y(d=>yS(d.dev)).curve(curve));
+}
+
+// ── view filter ───────────────────────────────────────────────
+function setView(m){
+  viewMode=m;
+  ['all','ok','noise'].forEach(x=>document.getElementById('btn-'+x).classList.toggle('active',x===m));
+  renderCards();
+}
+
+// ── jump select ───────────────────────────────────────────────
+function fillJumpSelect(){
+  const sel=document.getElementById('pass-sel');
+  sel.innerHTML='<option value="">Jump to pass…</option>';
+  passes.forEach(p=>{
+    const o=document.createElement('option');
+    o.value=p.id;
+    o.textContent=`Pass #${p.id} — ±${p.peak} (${p.isNoise?'noise':'valid'})`;
+    sel.appendChild(o);
+  });
+}
+function jumpToPass(id){
+  if(!id) return;
+  const card=document.getElementById(`pc-${id}`);
+  if(!card) return;
+  card.scrollIntoView({behavior:'smooth',block:'center'});
+  card.classList.add('selected');
+  setTimeout(()=>card.classList.remove('selected'),2000);
+}
+
+// ── clear ─────────────────────────────────────────────────────
+function clearData(){
+  samples=[]; passes=[];
+  ['stats-bar','controls','chart-section','passes-section'].forEach(id=>document.getElementById(id).style.display='none');
+  document.getElementById('dropzone').style.display='block';
+  document.getElementById('csv-input').value='';
+}
+</script>
+</body>
+</html>
