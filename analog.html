@@ -15,9 +15,9 @@
     --border:  #1e2330;
     --text:    #e8eaf0;
     --muted:   #4a5068;
-    --accent:  #00e5ff;
-    --accent2: #ff4d6d;
-    --accent3: #a8ff78;
+    --accent:  #00e5ff;   /* Cyan for Analog Curve */
+    --accent2: #ff4d6d;   /* Red for Noise */
+    --accent3: #39ff14;   /* Neon Green for Digital Hardware Trigger */
     --accent4: #ffd166;
   }
 
@@ -248,11 +248,39 @@ let brushBeh, brushG;
 let zoomBeh, zoomOverlay;
 
 // ── CSV parse ─────────────────────────────────────────────────
+let markers = []; // { t, counter } — digital detection stamps from MK: packets
+
 function parseCSV(text) {
-  return text.trim().split('\n').slice(1).map(l => {
-    const [t, raw, dev, ctr] = l.split(',');
-    return { t: +t, raw: +raw, dev: +dev, counter: +ctr };
-  }).filter(d => !isNaN(d.t) && !isNaN(d.dev));
+  const lines = text.trim().split('\n');
+  const samplesOut = [], markersOut = [];
+
+  // Skip the header line
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    // Unity format: timestamp_s,raw_adc,deviation,counter,digital_trigger
+    const parts = line.split(',');
+    if (parts.length >= 4) {
+      const t = +parts[0];
+      const raw = +parts[1];
+      const dev = +parts[2];
+      const ctr = +parts[3];
+      const isTrigger = parts.length > 4 ? +parts[4] : 0; // Check for 5th column
+
+      if (!isNaN(t) && !isNaN(dev)) {
+        samplesOut.push({ t, raw, dev, counter: ctr });
+        
+        // If the digital trigger fired exactly on this sample, save it
+        if (isTrigger === 1) {
+          markersOut.push({ t: t, counter: ctr });
+        }
+      }
+    }
+  }
+
+  markers = markersOut;
+  return samplesOut;
 }
 
 // ── segmentation ──────────────────────────────────────────────
@@ -311,7 +339,9 @@ function updateStats(){
   const avg=valid.length ? Math.round(d3.mean(valid,p=>p.peak)) : 0;
   document.getElementById('st-samples').textContent  = samples.length.toLocaleString();
   document.getElementById('st-duration').textContent = dur.toFixed(1)+'s';
-  document.getElementById('st-passes').textContent   = valid.length;
+  // show both digital count and analog curve count so mismatch is obvious
+  const markerLabel = markers.length ? `${markers.length} digital` : valid.length;
+  document.getElementById('st-passes').textContent   = markers.length ? `${markers.length} digital / ${valid.length} curve` : valid.length;
   document.getElementById('st-noise').textContent    = passes.filter(p=>p.isNoise).length;
   document.getElementById('st-peak').textContent     = '±'+peak;
   document.getElementById('st-avgpeak').textContent  = '±'+avg;
@@ -381,6 +411,10 @@ function buildChart(){
     .attr('stroke-width',1.5)
     .attr('filter','url(#glow-f)')
     .attr('d', makeLine(xCur));
+
+  // marker lines group (clipped) — vertical lines where D0 actually fired
+  gMain.gMarkers = gMain.append('g').attr('clip-path','url(#main-clip)');
+  drawMarkers(xCur);
 
   // y axis
   gMain.append('g').call(d3.axisLeft(yScale).ticks(6))
@@ -467,12 +501,41 @@ function drawXAxis(xS){
   .call(g=>g.selectAll('.tick line').attr('stroke','var(--border)'));
 }
 
+// Draw vertical marker lines — one per digital D0 detection
+function drawMarkers(xS){
+  if(!gMain.gMarkers || !markers.length) return;
+  gMain.gMarkers.selectAll('*').remove();
+
+  markers.forEach(m => {
+    const cx = xS(m.t);
+    if(cx < 0 || cx > cIW) return;
+
+    // vertical line
+    gMain.gMarkers.append('line')
+      .attr('x1', cx).attr('x2', cx)
+      .attr('y1', 0).attr('y2', cIH)
+      .attr('stroke', 'var(--accent2)')
+      .attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', '5,3')
+      .attr('opacity', 0.8);
+
+    // label at top
+    gMain.gMarkers.append('text')
+      .attr('x', cx + 4).attr('y', 12)
+      .attr('fill', 'var(--accent2)')
+      .attr('font-size', 9)
+      .attr('font-family', "'Space Mono',monospace")
+      .text(`#${m.counter}`);
+  });
+}
+
 function onZoom(event){
   const t = event.transform;
   xCur = t.rescaleX(xOrig);
   gLine.select('.main-line').attr('d', makeLine(xCur));
   drawXAxis(xCur);
   drawBands(xCur);
+  drawMarkers(xCur);
   // sync minimap brush
   const sel = [xOrig(xCur.invert(0)), xOrig(xCur.invert(cIW))];
   const mIW = getMiniIW();
@@ -609,26 +672,51 @@ function drawSparkline(p){
   const H = 56;
   if(W <= 0) return;
   const pad = 4;
+  
   const svg = d3.select(`#sp-${p.id}`).attr('width',W).attr('height',H);
   const xS = d3.scaleLinear().domain(d3.extent(p.samples,d=>d.t)).range([pad,W-pad]);
   const devs = p.samples.map(d=>d.dev);
   const yM = Math.max(Math.abs(d3.min(devs)),Math.abs(d3.max(devs)),50);
   const yS = d3.scaleLinear().domain([-yM,yM]).range([H-pad,pad]);
+  
   const color = p.isNoise ? 'var(--accent2)' : 'var(--accent)';
+  
   const defs = svg.append('defs');
   defs.append('linearGradient').attr('id',`gr-${p.id}`)
     .attr('x1','0%').attr('x2','0%').attr('y1','0%').attr('y2','100%')
     .selectAll('stop').data([{o:'0%',op:.22},{o:'100%',op:.02}]).enter().append('stop')
     .attr('offset',d=>d.o).attr('stop-color',color).attr('stop-opacity',d=>d.op);
+    
+  // Draw zero baseline
   svg.append('line').attr('x1',pad).attr('x2',W-pad)
     .attr('y1',yS(0)).attr('y2',yS(0)).attr('stroke','rgba(255,255,255,0.1)');
+    
   const curve = d3.curveCatmullRom.alpha(0.5);
+  
+  // Draw shaded analog area
   svg.append('path').datum(p.samples)
     .attr('fill',`url(#gr-${p.id})`)
     .attr('d',d3.area().x(d=>xS(d.t)).y0(yS(0)).y1(d=>yS(d.dev)).curve(curve));
+    
+  // Draw solid analog line
   svg.append('path').datum(p.samples)
     .attr('fill','none').attr('stroke',color).attr('stroke-width',1.6)
     .attr('d',d3.line().x(d=>xS(d.t)).y(d=>yS(d.dev)).curve(curve));
+
+  // ── Overlay the Digital Hardware Trigger ──
+  const passStart = p.samples[0].t;
+  const passEnd = p.samples[p.samples.length - 1].t;
+  const localMarkers = markers.filter(m => m.t >= passStart && m.t <= passEnd);
+
+  localMarkers.forEach(m => {
+    const mx = xS(m.t);
+    svg.append('line')
+      .attr('x1', mx).attr('x2', mx)
+      .attr('y1', pad).attr('y2', H - pad)
+      .attr('stroke', 'var(--accent3)')  // Neon green
+      .attr('stroke-width', 2)
+      .attr('stroke-dasharray', '3,3');
+  });
 }
 
 // ── view filter ───────────────────────────────────────────────
